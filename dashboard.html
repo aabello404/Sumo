@@ -1,0 +1,933 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SUMO-RL Traffic Control Center</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    
+    <style>
+        :root {
+            --bg-dark: #0a0c10;
+            --panel-bg: #13171e;
+            --accent: #f5a623;
+            --green: #39d98a;
+            --red: #ff4d6a;
+            --yellow: #ffd166;
+            --blue: #4dabf7;
+            --border: #2a313e;
+            --text-main: #e2e8f0;
+            --text-dim: #94a3b8;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        
+        body {
+            font-family: 'Rajdhani', sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            height: 100vh;
+            display: grid;
+            grid-template-columns: 260px 1fr 300px;
+            grid-template-rows: 52px 1fr;
+            grid-template-areas: 
+                "header header header"
+                "left center right";
+            overflow: hidden;
+        }
+
+        .mono { font-family: 'Share Tech Mono', monospace; }
+
+        /* Top Bar */
+        .top-bar {
+            grid-area: header;
+            background-color: var(--panel-bg);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+            z-index: 1000;
+        }
+        
+        .logo { font-size: 20px; font-weight: 700; color: var(--accent); letter-spacing: 1px; }
+        
+        .global-stats { display: flex; gap: 30px; }
+        .stat-item { display: flex; flex-direction: column; align-items: center; }
+        .stat-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; }
+        .stat-value { font-size: 18px; color: var(--text-main); }
+
+        .connection { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; background-color: gray; }
+        .dot.live { background-color: var(--green); box-shadow: 0 0 8px var(--green); }
+
+        /* Left Panel */
+        .left-panel {
+            grid-area: left;
+            background-color: var(--panel-bg);
+            border-right: 1px solid var(--border);
+            padding: 15px;
+            overflow-y: auto;
+        }
+
+        .tl-card {
+            background-color: rgba(255,255,255,0.03);
+            border: 1px solid var(--border);
+            border-left: 4px solid var(--border);
+            border-radius: 6px;
+            padding: 10px;
+            margin-bottom: 15px;
+            transition: all 0.2s ease;
+        }
+
+        .tl-header { display: flex; justify-content: space-between; margin-bottom: 10px; }
+        .tl-id { font-weight: 700; font-size: 15px; }
+        .phase-badge { background: var(--border); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+
+        .lamps { display: flex; gap: 8px; margin-bottom: 10px; }
+        .lamp { width: 14px; height: 14px; border-radius: 50%; background: #333; opacity: 0.3; }
+        .lamp.r.active { background: var(--red); opacity: 1; box-shadow: 0 0 8px var(--red); }
+        .lamp.y.active { background: var(--yellow); opacity: 1; box-shadow: 0 0 8px var(--yellow); }
+        .lamp.g.active { background: var(--green); opacity: 1; box-shadow: 0 0 8px var(--green); }
+
+        .tl-data { display: flex; justify-content: space-between; font-size: 13px; }
+        .action { font-weight: 700; }
+        .action.switch { color: var(--accent); }
+        .action.hold { color: var(--text-dim); }
+
+        /* Center Map */
+        .center-panel { grid-area: center; position: relative; }
+        #map { width: 100%; height: 100%; }
+        
+        .overlay {
+            position: absolute;
+            z-index: 999;
+            background: rgba(19, 23, 30, 0.8);
+            border: 1px solid var(--border);
+            padding: 10px;
+            border-radius: 6px;
+            pointer-events: none;
+        }
+        .step-overlay { top: 20px; left: 20px; font-size: 24px; color: var(--accent); }
+        .legend-overlay { bottom: 20px; left: 20px; font-size: 13px; }
+        .legend-item { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
+        .l-car { width: 8px; height: 14px; border-radius: 3px; border: 1px solid #13171e; }
+
+        /* Right Panel */
+        .right-panel {
+            grid-area: right;
+            background-color: var(--panel-bg);
+            border-left: 1px solid var(--border);
+            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            overflow-y: auto;
+        }
+        
+        .panel-title { font-size: 14px; color: var(--text-dim); text-transform: uppercase; margin-bottom: 10px; border-bottom: 1px solid var(--border); padding-bottom: 5px; }
+        
+        .chart-container { height: 160px; width: 100%; }
+
+        .delayed-list { display: flex; flex-direction: column; gap: 5px; font-size: 13px; }
+        .delayed-item { display: flex; justify-content: space-between; background: rgba(255,255,255,0.03); padding: 5px 8px; border-radius: 4px; }
+
+        #loading {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(10, 12, 16, 0.9); z-index: 2000;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+        }
+        .spinner { border: 4px solid var(--border); border-top: 4px solid var(--accent); border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin-bottom: 15px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+    <div id="loading">
+        <div class="spinner"></div>
+        <div style="color: var(--accent); font-size: 18px; letter-spacing: 2px;">WAITING FOR SIMULATION...</div>
+    </div>
+
+    <div class="top-bar">
+        <div class="logo">SUMO-RL TRAFFIC CONTROL CENTER</div>
+        <div class="global-stats">
+            <div class="stat-item"><span class="stat-label">EPISODE</span><span class="stat-value mono" id="top-episode">0</span></div>
+            <div class="stat-item"><span class="stat-label">SIM STEP</span><span class="stat-value mono" id="top-step">0</span></div>
+            <div class="stat-item"><span class="stat-label">VEHICLES</span><span class="stat-value mono" id="top-vehicles">0</span></div>
+        </div>
+        <div class="connection">
+            <div class="dot" id="conn-dot"></div>
+            <span id="conn-text">OFFLINE</span>
+        </div>
+    </div>
+
+    <div class="left-panel" id="tl-container">
+        </div>
+
+    <div class="center-panel">
+        <div id="map"></div>
+        <div class="overlay step-overlay mono" id="map-step">STEP 0000</div>
+        <div class="overlay legend-overlay">
+            <div style="color: var(--text-dim); margin-bottom: 5px;">VEHICLE STATUS</div>
+            <div class="legend-item"><div class="l-car" style="background: var(--blue);"></div> Moving</div>
+            <div class="legend-item"><div class="l-car" style="background: var(--yellow);"></div> Slow</div>
+            <div class="legend-item"><div class="l-car" style="background: var(--red);"></div> Waiting > 30s</div>
+        </div>
+    </div>
+
+    <div class="right-panel">
+        <div>
+            <div class="panel-title">LIVE STEP REWARDS</div>
+            <div class="chart-container"><canvas id="rewardChart"></canvas></div>
+        </div>
+        <div>
+            <div class="panel-title">TRAINING PROGRESS</div>
+            <div class="chart-container"><canvas id="trainChart"></canvas></div>
+        </div>
+        <div>
+            <div class="panel-title">TOP DELAYED VEHICLES</div>
+            <div class="delayed-list mono" id="delayed-list"></div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    
+    <script>
+        // Init Map
+        const map = L.map('map', {zoomControl: false}).setView([33.577, -7.633], 15);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(map);
+
+        let vehicleMarkers = {};
+        let tlMarkers = {};
+        let roadPolylines = [];
+        let firstBatchCentered = false;
+
+        // Init Charts
+        Chart.defaults.color = '#94a3b8';
+        Chart.defaults.font.family = "'Share Tech Mono', monospace";
+        
+        const rewardCtx = document.getElementById('rewardChart').getContext('2d');
+        const rewardChart = new Chart(rewardCtx, {
+            type: 'line',
+            data: { labels: [], datasets: [] },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                animation: false,
+                plugins: { legend: { display: false } },
+                scales: { 
+                    x: { display: false }, 
+                    y: { grid: { color: '#2a313e' } } 
+                }
+            }
+        });
+
+        const trainCtx = document.getElementById('trainChart').getContext('2d');
+        const trainChart = new Chart(trainCtx, {
+            type: 'line',
+            data: { labels: [], datasets: [] },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: { 
+                    x: { display: false }, 
+                    y: { grid: { color: '#2a313e' } } 
+                }
+            }
+        });
+
+        // WS Connection
+        let ws;
+        function connect() {
+            ws = new WebSocket("ws://localhost:8000/ws");
+            
+            ws.onopen = () => {
+                document.getElementById('conn-dot').classList.add('live');
+                document.getElementById('conn-text').innerText = 'LIVE';
+                document.getElementById('loading').style.display = 'none';
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                updateDashboard(data);
+            };
+
+            ws.onclose = () => {
+                document.getElementById('conn-dot').classList.remove('live');
+                document.getElementById('conn-text').innerText = 'OFFLINE';
+                document.getElementById('loading').style.display = 'flex';
+                setTimeout(connect, 2000);
+            };
+        }
+
+        const colors = ['#f5a623', '#4dabf7', '#39d98a', '#ff4d6a', '#a855f7', '#ec4899'];
+
+        function updateDashboard(data) {
+            // Top Stats
+            document.getElementById('top-step').innerText = data.step;
+            document.getElementById('top-episode').innerText = data.episode || 1;
+            document.getElementById('top-vehicles').innerText = data.num_vehicles;
+            document.getElementById('map-step').innerText = `STEP ${String(data.step).padStart(4, '0')}`;
+
+            // TL Cards and Markers
+            const tlContainer = document.getElementById('tl-container');
+            if (tlContainer.children.length === 0 && Object.keys(data.tl_states).length > 0) {
+                // Initialize datasets for reward chart
+                Object.keys(data.tl_states).forEach((tl, i) => {
+                    rewardChart.data.datasets.push({
+                        label: tl, data: [],
+                        borderColor: colors[i % colors.length],
+                        borderWidth: 1, pointRadius: 0
+                    });
+                });
+            }
+
+            tlContainer.innerHTML = ''; // Rebuild cards
+            
+            Object.entries(data.tl_states).forEach(([tl, info], i) => {
+                const action = data.actions ? data.actions[tl] : 0;
+                const reward = data.rewards ? data.rewards[tl] : 0;
+                const epReward = data.ep_rewards ? data.ep_rewards[tl] : 0;
+                
+                let rActive = info.state.toLowerCase().includes('r') ? 'active' : '';
+                let yActive = info.state.toLowerCase().includes('y') ? 'active' : '';
+                let gActive = info.state.toLowerCase().includes('g') ? 'active' : '';
+                
+                let borderColor = 'var(--border)';
+                if (gActive) borderColor = 'var(--green)';
+                if (yActive) borderColor = 'var(--yellow)';
+                if (rActive) borderColor = 'var(--red)';
+
+                tlContainer.innerHTML += `
+                    <div class="tl-card" style="border-left-color: ${borderColor}">
+                        <div class="tl-header">
+                            <span class="tl-id mono">${tl}</span>
+                            <span class="phase-badge mono">PHASE ${info.phase}</span>
+                        </div>
+                        <div class="lamps">
+                            <div class="lamp r ${rActive}"></div>
+                            <div class="lamp y ${yActive}"></div>
+                            <div class="lamp g ${gActive}"></div>
+                        </div>
+                        <div class="tl-data mono">
+                            <span class="action ${action === 1 ? 'switch' : 'hold'}">${action === 1 ? 'SWITCH' : 'HOLD'}</span>
+                            <span>R: ${reward.toFixed(2)}</span>
+                            <span>EP: ${epReward.toFixed(1)}</span>
+                        </div>
+                    </div>
+                `;
+
+                // Map marker (Square)
+                if (info.lat !== 0 && info.lon !== 0) {
+                    let fillColor = '#333';
+                    if (gActive) fillColor = '#39d98a';
+                    else if (yActive) fillColor = '#ffd166';
+                    else if (rActive) fillColor = '#ff4d6a';
+
+                    const tlIcon = L.divIcon({
+                        className: '',
+                        html: `<div style="width: 16px; height: 16px; background-color: ${fillColor}; border: 2px solid #13171e; border-radius: 2px;"></div>`,
+                        iconSize: [20, 20],
+                        iconAnchor: [10, 10]
+                    });
+
+                    if (!tlMarkers[tl]) {
+                        tlMarkers[tl] = L.marker([info.lat, info.lon], { icon: tlIcon }).addTo(map);
+                    } else {
+                        tlMarkers[tl].setIcon(tlIcon);
+                    }
+                }
+                
+                // Update Reward Chart
+                if (data.rewards) {
+                    const ds = rewardChart.data.datasets.find(d => d.label === tl);
+                    if (ds) {
+                        ds.data.push(reward);
+                        if (ds.data.length > 80) ds.data.shift();
+                    }
+                }
+            });
+
+            if (data.rewards) {
+                rewardChart.data.labels.push(data.step);
+                if (rewardChart.data.labels.length > 80) rewardChart.data.labels.shift();
+                rewardChart.update();
+            }
+
+            // --- VEHICLES: SVG Cars with Rotation Calculation ---
+            let activeVids = new Set(Object.keys(data.vehicles));
+            let delayedArr = [];
+            
+            Object.entries(data.vehicles).forEach(([vid, v]) => {
+                let color = '#4dabf7'; // moving
+                if (v.speed < 2) color = '#ffd166'; // slow
+                if (v.waiting > 30) color = '#ff4d6a'; // waiting
+                
+                delayedArr.push({id: vid, wait: v.waiting});
+
+                let angle = 0;
+                let oldMarker = vehicleMarkers[vid];
+
+                // Calculate rotation angle by comparing old and new coordinates
+                if (oldMarker && oldMarker._currentAngle !== undefined) {
+                    let oldLatLng = oldMarker.getLatLng();
+                    let dLat = v.lat - oldLatLng.lat;
+                    let dLng = v.lon - oldLatLng.lng;
+                    
+                    // If car actually moved, calculate its new heading
+                    if (Math.abs(dLat) > 0.000001 || Math.abs(dLng) > 0.000001) {
+                        // Math.atan2 with swapped arguments perfectly maps to CSS rotation (0deg = North)
+                        angle = Math.atan2(dLng, dLat) * (180 / Math.PI);
+                        oldMarker._currentAngle = angle;
+                    } else {
+                        // Car is stopped, keep its previous rotation
+                        angle = oldMarker._currentAngle;
+                    }
+                }
+
+                // The Custom SVG Car
+                const svgCar = `
+                <div style="transform: rotate(${angle}deg); width: 14px; height: 26px; transform-origin: center; display: flex; align-items: center; justify-content: center;">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 200" width="14" height="26">
+                        <rect x="5" y="5" width="90" height="190" rx="25" fill="${color}" stroke="#13171e" stroke-width="8"/>
+                        <rect x="15" y="45" width="70" height="35" rx="10" fill="#13171e" opacity="0.85"/>
+                        <rect x="15" y="135" width="70" height="25" rx="10" fill="#13171e" opacity="0.85"/>
+                        <rect x="20" y="5" width="20" height="10" rx="5" fill="#ffffff" opacity="0.8"/>
+                        <rect x="60" y="5" width="20" height="10" rx="5" fill="#ffffff" opacity="0.8"/>
+                        <rect x="20" y="185" width="20" height="10" rx="5" fill="#ff4d6a" opacity="0.8"/>
+                        <rect x="60" y="185" width="20" height="10" rx="5" fill="#ff4d6a" opacity="0.8"/>
+                    </svg>
+                </div>`;
+
+                const carIcon = L.divIcon({
+                    className: '', // Prevents Leaflet's default white background
+                    html: svgCar,
+                    iconSize: [14, 26],
+                    iconAnchor: [7, 13]
+                });
+
+                if (!oldMarker) {
+                    vehicleMarkers[vid] = L.marker([v.lat, v.lon], { icon: carIcon }).addTo(map);
+                    vehicleMarkers[vid]._currentAngle = 0; // Starts facing North until it moves
+                } else {
+                    oldMarker.setLatLng([v.lat, v.lon]);
+                    oldMarker.setIcon(carIcon); // Updates rotation and color
+                }
+            });
+
+            // Auto-center map on first vehicle batch
+            if (!firstBatchCentered && Object.keys(data.vehicles).length > 0) {
+                const firstV = Object.values(data.vehicles)[0];
+                map.setView([firstV.lat, firstV.lon], 16);
+                firstBatchCentered = true;
+            }
+
+            // Cleanup old vehicles
+            Object.keys(vehicleMarkers).forEach(vid => {
+                if (!activeVids.has(vid)) {
+                    map.removeLayer(vehicleMarkers[vid]);
+                    delete vehicleMarkers[vid];
+                }
+            });
+
+            // Delayed List
+            delayedArr.sort((a,b) => b.wait - a.wait);
+            const dList = document.getElementById('delayed-list');
+            dList.innerHTML = '';
+            delayedArr.slice(0, 12).forEach(v => {
+                dList.innerHTML += `<div class="delayed-item"><span>${v.id}</span><span style="color:${v.wait>30?'var(--red)':'var(--text-main)'}">${Math.floor(v.wait)}s</span></div>`;
+            });
+
+            // Roads (draw once)
+            if (roadPolylines.length === 0 && data.roads && data.roads.length > 0) {
+                data.roads.forEach(r => {
+                    const latlngs = r.points.map(p => [p.lat, p.lon]);
+                    const poly = L.polyline(latlngs, {color: '#2a313e', weight: 3, opacity: 0.5}).addTo(map);
+                    poly.bringToBack();
+                    roadPolylines.push(poly);
+                });
+            }
+            
+            // Train Chart Update
+            if (data.training_stats && Object.keys(data.training_stats).length > 0) {
+                const stats = data.training_stats;
+                if (trainChart.data.datasets.length === 0) {
+                    Object.keys(stats).forEach((agent, i) => {
+                        trainChart.data.datasets.push({
+                            label: agent, data: [],
+                            borderColor: colors[i % colors.length],
+                            borderWidth: 1.5, pointRadius: 0
+                        });
+                    });
+                }
+                
+                let maxLen = 0;
+                Object.keys(stats).forEach(agent => {
+                    const ds = trainChart.data.datasets.find(d => d.label === agent);
+                    if (ds) {
+                        ds.data = stats[agent].rewards;
+                        maxLen = Math.max(maxLen, ds.data.length);
+                    }
+                });
+                trainChart.data.labels = Array.from({length: maxLen}, (_, i) => i);
+                trainChart.update();
+            }
+        }
+
+        connect();
+    </script>
+</body>
+</html>
+
+
+
+
+<!-- 
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SUMO-RL Traffic Control Center</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+    
+    <style>
+        :root {
+            --bg-dark: #0a0c10;
+            --panel-bg: #13171e;
+            --accent: #f5a623;
+            --green: #39d98a;
+            --red: #ff4d6a;
+            --yellow: #ffd166;
+            --blue: #4dabf7;
+            --border: #2a313e;
+            --text-main: #e2e8f0;
+            --text-dim: #94a3b8;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        
+        body {
+            font-family: 'Rajdhani', sans-serif;
+            background-color: var(--bg-dark);
+            color: var(--text-main);
+            height: 100vh;
+            display: grid;
+            grid-template-columns: 260px 1fr 300px;
+            grid-template-rows: 52px 1fr;
+            grid-template-areas: 
+                "header header header"
+                "left center right";
+            overflow: hidden;
+        }
+
+        .mono { font-family: 'Share Tech Mono', monospace; }
+
+        /* Top Bar */
+        .top-bar {
+            grid-area: header;
+            background-color: var(--panel-bg);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 20px;
+            z-index: 1000;
+        }
+        
+        .logo { font-size: 20px; font-weight: 700; color: var(--accent); letter-spacing: 1px; }
+        
+        .global-stats { display: flex; gap: 30px; }
+        .stat-item { display: flex; flex-direction: column; align-items: center; }
+        .stat-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; }
+        .stat-value { font-size: 18px; color: var(--text-main); }
+
+        .connection { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+        .dot { width: 10px; height: 10px; border-radius: 50%; background-color: gray; }
+        .dot.live { background-color: var(--green); box-shadow: 0 0 8px var(--green); }
+
+        /* Left Panel */
+        .left-panel {
+            grid-area: left;
+            background-color: var(--panel-bg);
+            border-right: 1px solid var(--border);
+            padding: 15px;
+            overflow-y: auto;
+        }
+
+        .tl-card {
+            background-color: rgba(255,255,255,0.03);
+            border: 1px solid var(--border);
+            border-left: 4px solid var(--border);
+            border-radius: 6px;
+            padding: 10px;
+            margin-bottom: 15px;
+            transition: all 0.2s ease;
+        }
+
+        .tl-header { display: flex; justify-content: space-between; margin-bottom: 10px; }
+        .tl-id { font-weight: 700; font-size: 15px; }
+        .phase-badge { background: var(--border); padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+
+        .lamps { display: flex; gap: 8px; margin-bottom: 10px; }
+        .lamp { width: 14px; height: 14px; border-radius: 50%; background: #333; opacity: 0.3; }
+        .lamp.r.active { background: var(--red); opacity: 1; box-shadow: 0 0 8px var(--red); }
+        .lamp.y.active { background: var(--yellow); opacity: 1; box-shadow: 0 0 8px var(--yellow); }
+        .lamp.g.active { background: var(--green); opacity: 1; box-shadow: 0 0 8px var(--green); }
+
+        .tl-data { display: flex; justify-content: space-between; font-size: 13px; }
+        .action { font-weight: 700; }
+        .action.switch { color: var(--accent); }
+        .action.hold { color: var(--text-dim); }
+
+        /* Center Map */
+        .center-panel { grid-area: center; position: relative; }
+        #map { width: 100%; height: 100%; }
+        
+        .overlay {
+            position: absolute;
+            z-index: 999;
+            background: rgba(19, 23, 30, 0.8);
+            border: 1px solid var(--border);
+            padding: 10px;
+            border-radius: 6px;
+            pointer-events: none;
+        }
+        .step-overlay { top: 20px; left: 20px; font-size: 24px; color: var(--accent); }
+        .legend-overlay { bottom: 20px; left: 20px; font-size: 13px; }
+        .legend-item { display: flex; align-items: center; gap: 8px; margin-top: 5px; }
+        .l-circle { width: 10px; height: 10px; border-radius: 50%; }
+
+        /* Right Panel */
+        .right-panel {
+            grid-area: right;
+            background-color: var(--panel-bg);
+            border-left: 1px solid var(--border);
+            padding: 15px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            overflow-y: auto;
+        }
+        
+        .panel-title { font-size: 14px; color: var(--text-dim); text-transform: uppercase; margin-bottom: 10px; border-bottom: 1px solid var(--border); padding-bottom: 5px; }
+        
+        .chart-container { height: 160px; width: 100%; }
+
+        .delayed-list { display: flex; flex-direction: column; gap: 5px; font-size: 13px; }
+        .delayed-item { display: flex; justify-content: space-between; background: rgba(255,255,255,0.03); padding: 5px 8px; border-radius: 4px; }
+
+        #loading {
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(10, 12, 16, 0.9); z-index: 2000;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+        }
+        .spinner { border: 4px solid var(--border); border-top: 4px solid var(--accent); border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; margin-bottom: 15px; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    </style>
+</head>
+<body>
+
+    <div id="loading">
+        <div class="spinner"></div>
+        <div style="color: var(--accent); font-size: 18px; letter-spacing: 2px;">WAITING FOR SIMULATION...</div>
+    </div>
+
+    <div class="top-bar">
+        <div class="logo">SUMO-RL TRAFFIC CONTROL CENTER</div>
+        <div class="global-stats">
+            <div class="stat-item"><span class="stat-label">EPISODE</span><span class="stat-value mono" id="top-episode">0</span></div>
+            <div class="stat-item"><span class="stat-label">SIM STEP</span><span class="stat-value mono" id="top-step">0</span></div>
+            <div class="stat-item"><span class="stat-label">VEHICLES</span><span class="stat-value mono" id="top-vehicles">0</span></div>
+        </div>
+        <div class="connection">
+            <div class="dot" id="conn-dot"></div>
+            <span id="conn-text">OFFLINE</span>
+        </div>
+    </div>
+
+    <div class="left-panel" id="tl-container">
+        </div>
+
+    <div class="center-panel">
+        <div id="map"></div>
+        <div class="overlay step-overlay mono" id="map-step">STEP 0000</div>
+        <div class="overlay legend-overlay">
+            <div style="color: var(--text-dim); margin-bottom: 5px;">VEHICLE STATUS</div>
+            <div class="legend-item"><div class="l-circle" style="background: var(--blue);"></div> Moving</div>
+            <div class="legend-item"><div class="l-circle" style="background: var(--yellow);"></div> Slow</div>
+            <div class="legend-item"><div class="l-circle" style="background: var(--red);"></div> Waiting > 30s</div>
+        </div>
+    </div>
+
+    <div class="right-panel">
+        <div>
+            <div class="panel-title">LIVE STEP REWARDS</div>
+            <div class="chart-container"><canvas id="rewardChart"></canvas></div>
+        </div>
+        <div>
+            <div class="panel-title">TRAINING PROGRESS</div>
+            <div class="chart-container"><canvas id="trainChart"></canvas></div>
+        </div>
+        <div>
+            <div class="panel-title">TOP DELAYED VEHICLES</div>
+            <div class="delayed-list mono" id="delayed-list"></div>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+    
+    <script>
+        // Init Map
+        const map = L.map('map', {zoomControl: false}).setView([33.577, -7.633], 15);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(map);
+
+        let vehicleMarkers = {};
+        let tlMarkers = {};
+        let roadPolylines = [];
+        let firstBatchCentered = false;
+
+        // Init Charts
+        Chart.defaults.color = '#94a3b8';
+        Chart.defaults.font.family = "'Share Tech Mono', monospace";
+        
+        const rewardCtx = document.getElementById('rewardChart').getContext('2d');
+        const rewardChart = new Chart(rewardCtx, {
+            type: 'line',
+            data: { labels: [], datasets: [] },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                animation: false,
+                plugins: { legend: { display: false } },
+                scales: { 
+                    x: { display: false }, 
+                    y: { grid: { color: '#2a313e' } } 
+                }
+            }
+        });
+
+        const trainCtx = document.getElementById('trainChart').getContext('2d');
+        const trainChart = new Chart(trainCtx, {
+            type: 'line',
+            data: { labels: [], datasets: [] },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                plugins: { legend: { display: false } },
+                scales: { 
+                    x: { display: false }, 
+                    y: { grid: { color: '#2a313e' } } 
+                }
+            }
+        });
+
+        // WS Connection
+        let ws;
+        function connect() {
+            ws = new WebSocket("ws://localhost:8000/ws");
+            
+            ws.onopen = () => {
+                document.getElementById('conn-dot').classList.add('live');
+                document.getElementById('conn-text').innerText = 'LIVE';
+                document.getElementById('loading').style.display = 'none';
+            };
+
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                updateDashboard(data);
+            };
+
+            ws.onclose = () => {
+                document.getElementById('conn-dot').classList.remove('live');
+                document.getElementById('conn-text').innerText = 'OFFLINE';
+                document.getElementById('loading').style.display = 'flex';
+                setTimeout(connect, 2000);
+            };
+        }
+
+        const colors = ['#f5a623', '#4dabf7', '#39d98a', '#ff4d6a', '#a855f7', '#ec4899'];
+
+        function updateDashboard(data) {
+            // Top Stats
+            document.getElementById('top-step').innerText = data.step;
+            document.getElementById('top-episode').innerText = data.episode || 1;
+            document.getElementById('top-vehicles').innerText = data.num_vehicles;
+            document.getElementById('map-step').innerText = `STEP ${String(data.step).padStart(4, '0')}`;
+
+            // TL Cards and Markers
+            const tlContainer = document.getElementById('tl-container');
+            if (tlContainer.children.length === 0 && Object.keys(data.tl_states).length > 0) {
+                // Initialize datasets for reward chart
+                Object.keys(data.tl_states).forEach((tl, i) => {
+                    rewardChart.data.datasets.push({
+                        label: tl, data: [],
+                        borderColor: colors[i % colors.length],
+                        borderWidth: 1, pointRadius: 0
+                    });
+                });
+            }
+
+            tlContainer.innerHTML = ''; // Rebuild cards (lazy but effective for small N)
+            
+            Object.entries(data.tl_states).forEach(([tl, info], i) => {
+                const action = data.actions ? data.actions[tl] : 0;
+                const reward = data.rewards ? data.rewards[tl] : 0;
+                const epReward = data.ep_rewards ? data.ep_rewards[tl] : 0;
+                
+                let rActive = info.state.toLowerCase().includes('r') ? 'active' : '';
+                let yActive = info.state.toLowerCase().includes('y') ? 'active' : '';
+                let gActive = info.state.toLowerCase().includes('g') ? 'active' : '';
+                
+                let borderColor = 'var(--border)';
+                if (gActive) borderColor = 'var(--green)';
+                if (yActive) borderColor = 'var(--yellow)';
+                if (rActive) borderColor = 'var(--red)';
+
+                tlContainer.innerHTML += `
+                    <div class="tl-card" style="border-left-color: ${borderColor}">
+                        <div class="tl-header">
+                            <span class="tl-id mono">${tl}</span>
+                            <span class="phase-badge mono">PHASE ${info.phase}</span>
+                        </div>
+                        <div class="lamps">
+                            <div class="lamp r ${rActive}"></div>
+                            <div class="lamp y ${yActive}"></div>
+                            <div class="lamp g ${gActive}"></div>
+                        </div>
+                        <div class="tl-data mono">
+                            <span class="action ${action === 1 ? 'switch' : 'hold'}">${action === 1 ? 'SWITCH' : 'HOLD'}</span>
+                            <span>R: ${reward.toFixed(2)}</span>
+                            <span>EP: ${epReward.toFixed(1)}</span>
+                        </div>
+                    </div>
+                `;
+
+                // Map marker (Now Square)
+                if (info.lat !== 0 && info.lon !== 0) {
+                    let fillColor = '#333';
+                    if (gActive) fillColor = '#39d98a';
+                    else if (yActive) fillColor = '#ffd166';
+                    else if (rActive) fillColor = '#ff4d6a';
+
+                    // Using a custom DivIcon to make it a square
+                    const tlIcon = L.divIcon({
+                        className: '', // Prevents Leaflet's default white square background
+                        html: `<div style="width: 16px; height: 16px; background-color: ${fillColor}; border: 2px solid #13171e; border-radius: 2px;"></div>`,
+                        iconSize: [20, 20],
+                        iconAnchor: [10, 10]
+                    });
+
+                    if (!tlMarkers[tl]) {
+                        tlMarkers[tl] = L.marker([info.lat, info.lon], { icon: tlIcon }).addTo(map);
+                    } else {
+                        tlMarkers[tl].setIcon(tlIcon);
+                    }
+                }
+                
+                // Update Reward Chart
+                if (data.rewards) {
+                    const ds = rewardChart.data.datasets.find(d => d.label === tl);
+                    if (ds) {
+                        ds.data.push(reward);
+                        if (ds.data.length > 80) ds.data.shift();
+                    }
+                }
+            });
+
+            if (data.rewards) {
+                rewardChart.data.labels.push(data.step);
+                if (rewardChart.data.labels.length > 80) rewardChart.data.labels.shift();
+                rewardChart.update();
+            }
+
+            // Vehicles (Radius increased to 5)
+            let activeVids = new Set(Object.keys(data.vehicles));
+            let delayedArr = [];
+            
+            Object.entries(data.vehicles).forEach(([vid, v]) => {
+                let color = '#4dabf7'; // moving
+                if (v.speed < 2) color = '#ffd166'; // slow
+                if (v.waiting > 30) color = '#ff4d6a'; // waiting
+                
+                delayedArr.push({id: vid, wait: v.waiting});
+
+                if (!vehicleMarkers[vid]) {
+                    vehicleMarkers[vid] = L.circleMarker([v.lat, v.lon], {
+                        radius: 5, color: color, fillOpacity: 0.8, weight: 0
+                    }).addTo(map);
+                } else {
+                    vehicleMarkers[vid].setLatLng([v.lat, v.lon]);
+                    vehicleMarkers[vid].setStyle({ color: color });
+                }
+            });
+
+            // Auto-center map on first vehicle batch
+            if (!firstBatchCentered && Object.keys(data.vehicles).length > 0) {
+                const firstV = Object.values(data.vehicles)[0];
+                map.setView([firstV.lat, firstV.lon], 16);
+                firstBatchCentered = true;
+            }
+
+            // Cleanup old vehicles
+            Object.keys(vehicleMarkers).forEach(vid => {
+                if (!activeVids.has(vid)) {
+                    map.removeLayer(vehicleMarkers[vid]);
+                    delete vehicleMarkers[vid];
+                }
+            });
+
+            // Delayed List
+            delayedArr.sort((a,b) => b.wait - a.wait);
+            const dList = document.getElementById('delayed-list');
+            dList.innerHTML = '';
+            delayedArr.slice(0, 12).forEach(v => {
+                dList.innerHTML += `<div class="delayed-item"><span>${v.id}</span><span style="color:${v.wait>30?'var(--red)':'var(--text-main)'}">${Math.floor(v.wait)}s</span></div>`;
+            });
+
+            // Roads (draw once)
+            if (roadPolylines.length === 0 && data.roads && data.roads.length > 0) {
+                data.roads.forEach(r => {
+                    const latlngs = r.points.map(p => [p.lat, p.lon]);
+                    const poly = L.polyline(latlngs, {color: '#2a313e', weight: 3, opacity: 0.5}).addTo(map);
+                    poly.bringToBack();
+                    roadPolylines.push(poly);
+                });
+            }
+            
+            // Train Chart Update
+            if (data.training_stats && Object.keys(data.training_stats).length > 0) {
+                const stats = data.training_stats;
+                if (trainChart.data.datasets.length === 0) {
+                    Object.keys(stats).forEach((agent, i) => {
+                        trainChart.data.datasets.push({
+                            label: agent, data: [],
+                            borderColor: colors[i % colors.length],
+                            borderWidth: 1.5, pointRadius: 0
+                        });
+                    });
+                }
+                
+                let maxLen = 0;
+                Object.keys(stats).forEach(agent => {
+                    const ds = trainChart.data.datasets.find(d => d.label === agent);
+                    if (ds) {
+                        ds.data = stats[agent].rewards;
+                        maxLen = Math.max(maxLen, ds.data.length);
+                    }
+                });
+                trainChart.data.labels = Array.from({length: maxLen}, (_, i) => i);
+                trainChart.update();
+            }
+        }
+
+        connect();
+    </script>
+</body>
+</html>
+ -->
